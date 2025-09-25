@@ -1,45 +1,59 @@
 const express = require('express');
-const play = require('play-dl');
+const { exec } = require('child_process');
+const ytdlp = require('yt-dlp-exec');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY;
 
-// Middleware to parse JSON
+// Middleware
 app.use(express.json());
 
-// API route
 app.get('/api/YouTubeDownloader', async (req, res) => {
     const { url, apikey } = req.query;
 
-    // Check API key
+    // API key validation
     if (!apikey || apikey !== API_KEY) {
         return res.status(401).json({ error: 'Invalid API key' });
     }
 
-    // Check URL
     if (!url) {
         return res.status(400).json({ error: 'Missing YouTube URL' });
     }
 
     try {
-        const info = await play.video_info(url);
+        // Use yt-dlp to get video info
+        const info = await ytdlp(url, {
+            dumpSingleJson: true,
+            noWarnings: true,
+            noCheckCertificate: true,
+            preferFreeFormats: true,
+            youtubeSkipDashManifest: true
+        });
 
-        // Pick 360p MP4 progressive stream
-        const format = info.streams.find(f => f.container === 'mp4' && f.quality_label === '360p');
+        // Filter for mp4 progressive streams (video + audio)
+        const mp4Formats = info.formats.filter(f => 
+            f.ext === 'mp4' && f.vcodec !== 'none' && f.acodec !== 'none'
+        );
 
-        if (!format) {
-            return res.status(404).json({ error: 'Suitable format not found' });
+        if (mp4Formats.length === 0) {
+            return res.status(404).json({ error: 'No mp4 progressive format found' });
         }
 
+        // Pick best quality mp4
+        const bestFormat = mp4Formats.sort((a, b) => b.height - a.height)[0];
+
         res.json({
-            title: info.video_details.title,
-            direct_link: format.url,
-            duration: info.video_details.durationInSec
+            title: info.title,
+            duration: info.duration,
+            direct_link: bestFormat.url,
+            quality: `${bestFormat.height}p`
         });
+
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: "Failed to get video info. " + err.message });
     }
 });
 
